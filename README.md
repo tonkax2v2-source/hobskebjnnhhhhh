@@ -44,7 +44,7 @@ Both CLIs accept the same options.
 | `min` | variable renaming only | ~1.3× |
 | `balanced` *(default)* | renaming + string encryption + number mangling + constant array + junk code + IIFE wrap | ~3× |
 | `heavy` | balanced **+ control-flow flattening + encrypted loader** | ~20–30× |
-| `max` | **compile to a custom bytecode VM**, then obfuscate the VM itself and wrap it in the encrypted loader (lura.ph / Luraph style; strongest) | ~50–80× |
+| `max` | **compile to a custom bytecode VM** (shuffled opcodes, encrypted instruction streams, per-proto keys, integrity checksum, decoy handlers), then obfuscate the VM itself and wrap it in the encrypted loader (lura.ph / Luraph style; strongest) | ~60–100× |
 
 At `--level max` the program is compiled to a **custom bytecode virtual
 machine**: your logic becomes data (an instruction array + constant pool)
@@ -87,7 +87,7 @@ The strongest layer compiles the program to a **custom instruction set** and
 ships a small interpreter that runs it — exactly the approach commercial
 protectors like Luraph / lura.ph use.
 
-* Each Lua function becomes a *proto*: a numeric `code` array, a `consts` pool,
+* Each Lua function becomes a *proto*: an instruction stream, a `consts` pool,
   nested protos, and upvalue descriptors.
 * A stack-based dispatch loop executes the opcodes. `for` loops are lowered to
   `while` + locals first, so the VM only handles a small core.
@@ -97,9 +97,30 @@ protectors like Luraph / lura.ph use.
   so closures capture exactly the right instance per iteration. A frame-marker
   stack handles variadic regions (`f(g())`, `{...}`, `return f()`).
 
-Source lives in `src/vm/` (`opcodes.lua`, `desugar.lua`, `compiler.lua`,
-`runtime.lua`, `serialize.lua`). The interpreter's opcode constants are
-generated from `opcodes.lua`, so the compiler and interpreter can never drift.
+Advanced hardening applied to the VM (all on by default at `--level max`):
+
+* **Per-build opcode shuffling** — the numeric opcode assignment is randomised
+  every build from the seed, so two obfuscations share no recognisable VM.
+  There is no fixed signature to match and no universal devirtualizer.
+* **Encrypted bytecode stream** — each proto's instructions are packed into an
+  encrypted byte string (not visible as instructions) and decoded at load. The
+  structure of the program is gone even from the data.
+* **Per-proto rolling keys** — every function's stream uses its own key, so the
+  same opcode encodes to different bytes in different functions.
+* **Integrity checksum (anti-tamper)** — each stream carries a checksum verified
+  on decode; editing the bytecode corrupts the load instead of running modified
+  logic.
+* **Decoy opcodes** — the dispatch contains extra handlers for opcode numbers
+  the compiler never emits, as pure noise against anyone mapping the VM.
+
+Then the whole VM (interpreter + encrypted protos) is run through the balanced
+passes — renaming it and encrypting its remaining string constants — and sealed
+in the encrypted loader.
+
+Source lives in `src/vm/` (`opcodes.lua`, `profile.lua`, `desugar.lua`,
+`compiler.lua`, `runtime.lua`, `serialize.lua`). The interpreter's opcode
+constants are generated from `opcodes.lua` and the build profile, so the
+compiler and interpreter can never drift.
 
 ### Example
 
@@ -184,8 +205,9 @@ src/
   passes/               one module per transformation
                         (encrypt_strings, number_mangle, rename_vars,
                          control_flow, const_array, junk_code, finalize)
-  vm/                   bytecode VM: opcodes, desugar, compiler,
-                        runtime (interpreter), serialize
+  vm/                   bytecode VM: opcodes, profile (opcode shuffle +
+                        decoys), desugar, compiler, runtime (interpreter),
+                        serialize (encrypted stream + checksum)
 examples/
   hello.lua, edge.lua   sample inputs (edge.lua stresses tricky syntax)
 tools/

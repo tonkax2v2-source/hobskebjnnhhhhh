@@ -1,24 +1,56 @@
 -- runtime.lua
--- Produces the SOURCE of the VM interpreter that is embedded into obfuscated
--- output. The opcode constants are generated from opcodes.lua so the
--- interpreter and the compiler can never disagree on numbering.
+-- Produces the SOURCE of the VM interpreter embedded into obfuscated output,
+-- specialised for a per-build profile (randomised opcode numbers + decoys).
 --
--- The interpreter is a classic bytecode dispatch loop. It leans on the host
--- Lua for closures, upvalues, metatables, coroutines and GC; it only encodes
--- program structure. Every local is a box {v=...}; CLOSURE captures boxes, so
+-- The interpreter is a bytecode dispatch loop. It delegates closures, upvalues,
+-- metatables, coroutines and GC to the host Lua; it only encodes program
+-- structure. Every local is a box {v=...}; CLOSURE captures boxes so that
 -- per-iteration closure capture is preserved.
+--
+-- Each proto's instruction stream is stored encrypted (per-proto rolling key)
+-- and decoded at load by __vmdec, which also verifies an integrity checksum so
+-- tampering with the bytecode corrupts the load.
 
 local opcodes = require("src.vm.opcodes")
 
 local M = {}
 
-local function opcode_prelude(names)
+-- Emits `local NAME = <emitted number>` for every opcode, using the profile's
+-- permutation so the numbers differ per build.
+local function opcode_prelude(profile)
   local t = {}
-  for i, n in ipairs(names) do t[#t + 1] = "local " .. n .. "=" .. i end
+  for i, n in ipairs(opcodes.NAMES) do
+    t[#t + 1] = "local " .. n .. "=" .. profile.perm[i]
+  end
   return table.concat(t, " ") .. " "
 end
 
--- Interpreter body. Uses the opcode names defined by the prelude.
+-- The bytecode decoder + integrity check. Pure integer arithmetic (no bitwise),
+-- so it runs on Lua 5.1 - 5.4.
+local DECODER = [==[
+local __vmdec=function(s,k1,k2,chk)
+  local pos=0 local sum=0 local sb=string.byte
+  local function g()
+    local p=pos
+    local b0=(sb(s,p+1)-(k1+(p+1)*k2))%256
+    local b1=(sb(s,p+2)-(k1+(p+2)*k2))%256
+    local b2=(sb(s,p+3)-(k1+(p+3)*k2))%256
+    local b3=(sb(s,p+4)-(k1+(p+4)*k2))%256
+    pos=p+4
+    sum=(sum+b0+b1*2+b2*3+b3*4)%16777213
+    local n=b0+256*(b1+256*(b2+256*b3))
+    if n>=2147483648 then n=n-4294967296 end
+    return n
+  end
+  local cnt=g()
+  local code={}
+  for i=1,cnt do local o=g() local a=g() code[i]={o,a} end
+  if sum~=chk then return error("integrity") end
+  return code
+end
+]==]
+
+-- Interpreter body. `-- @DECOYS@` is where decoy branches are spliced in.
 local BODY = [==[
 local tpack=function(...) return {n=select('#',...),...} end
 local tunpack=table.unpack or unpack
@@ -118,15 +150,32 @@ exec=function(proto,upvals,ENV,argpack)
     elseif op==JMPIFFALSEK then if not stk[top] then pc=a else top=top-1 end
     elseif op==JMPIFTRUEK then if stk[top] then pc=a else top=top-1 end
     elseif op==POP then top=top-a
+-- @DECOYS@
     end
   end
 end
 ]==]
 
--- Returns the interpreter source (opcode prelude + body). `exec` is left as a
--- local for the bootstrap to call.
-function M.source()
-  return opcode_prelude(opcodes.NAMES) .. BODY
+-- Builds decoy branches: harmless stack no-ops for opcode numbers the compiler
+-- never emits, so they are pure noise in the dispatch.
+local function decoy_branches(profile)
+  local t = {}
+  for _, num in ipairs(profile.decoys) do
+    local forms = {
+      "    elseif op==" .. num .. " then top=top+1 stk[top]=a top=top-1",
+      "    elseif op==" .. num .. " then local _=marks[mtop]",
+      "    elseif op==" .. num .. " then stk[top+1]=a",
+      "    elseif op==" .. num .. " then pc=pc+0",
+    }
+    t[#t + 1] = forms[(num % #forms) + 1]
+  end
+  return table.concat(t, "\n")
+end
+
+-- Returns the interpreter source for a given profile.
+function M.source(profile)
+  local body = BODY:gsub("%-%- @DECOYS@", (decoy_branches(profile):gsub("%%", "%%%%")))
+  return opcode_prelude(profile) .. DECODER .. body
 end
 
 return M

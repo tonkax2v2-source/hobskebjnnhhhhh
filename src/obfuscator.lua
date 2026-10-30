@@ -71,13 +71,15 @@ end
 -- Compiles the chunk to VM bytecode and returns a fresh parsed chunk of the
 -- generated interpreter+bytecode source, so the normal passes can obfuscate it
 -- as a second layer.
-local function vm_transform(chunk)
+local function vm_transform(chunk, rng)
   local desugar = require("src.vm.desugar")
   local compiler = require("src.vm.compiler")
   local serialize = require("src.vm.serialize")
+  local profile = require("src.vm.profile")
   desugar.run(chunk)
   local mainproto = compiler.compile(chunk)
-  local vmsrc = serialize.generate(mainproto)
+  local vmprofile = profile.build(rng)
+  local vmsrc = serialize.generate(mainproto, vmprofile, rng)
   return parser.parse(vmsrc, "vm")
 end
 
@@ -140,7 +142,7 @@ function M.obfuscate(src, opts)
   local chunk = parser.parse(src, opts.chunkname or "input")
 
   if do_vm then
-    chunk = vm_transform(chunk)
+    chunk = vm_transform(chunk, rng)
   end
 
   local ctx = {
