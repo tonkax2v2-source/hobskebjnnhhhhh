@@ -26,14 +26,21 @@ local function opcode_prelude(profile)
 end
 
 -- Decoder + proto assembler. Pure integer arithmetic (5.1 - 5.4 safe).
+--   * Integrity is a checksum over the ENCRYPTED bytes, so it is verified
+--     without decrypting anything; tampering any byte is caught.
+--   * The instruction stream is decoded eagerly (needed to run), but each
+--     constant is left encrypted and decrypted lazily on first access via a
+--     metatable, then cached — plaintext constants are not materialised at
+--     load (Luraph LPH_ENCSTR-style lazy decryption).
 local DECODER = [==[
 local __vmdec=function(s,k1,k2,chk)
-  local pos=0 local sum=0 local sb=string.byte local sc=string.char
+  local sb=string.byte local sc=string.char
+  local cs=0 for i=1,#s do cs=(cs+sb(s,i)*(((i-1)%7)+1))%16777213 end
+  if cs~=chk then return error("integrity") end
+  local pos=0
   local function gb()
     pos=pos+1
-    local pb=(sb(s,pos)-(k1+pos*k2))%256
-    sum=(sum+pb*(((pos-1)%7)+1))%16777213
-    return pb
+    return (sb(s,pos)-(k1+pos*k2))%256
   end
   local function g()
     local b0=gb() local b1=gb() local b2=gb() local b3=gb()
@@ -41,29 +48,48 @@ local __vmdec=function(s,k1,k2,chk)
     if n>=2147483648 then n=n-4294967296 end
     return n
   end
-  local function gstr()
-    local len=g() local t={} for i=1,len do t[i]=sc(gb()) end return table.concat(t)
+  local function payload(off,len)
+    local t={} for j=1,len do local p=off+j t[j]=sc((sb(s,p)-(k1+p*k2))%256) end
+    return table.concat(t)
   end
   local kcount=g()
-  local K={}
+  local meta={}
   for i=1,kcount do
     local tag=gb()
-    if tag==0 then K[i]=gstr()
-    elseif tag==1 then K[i]=tonumber(gstr())
-    elseif tag==2 then K[i]=true
-    elseif tag==3 then K[i]=false end
+    if tag==0 or tag==1 then
+      local len=g() meta[i]={tag,pos,len} pos=pos+len
+    else meta[i]={tag} end
   end
   local ccount=g()
   local code={}
   for i=1,ccount do local o=g() local a=g() code[i]={o,a} end
-  if sum~=chk then return error("integrity") end
+  local K=setmetatable({},{__index=function(tb,i)
+    local m=meta[i] local tag=m[1] local v
+    if tag==0 then v=payload(m[2],m[3])
+    elseif tag==1 then v=tonumber(payload(m[2],m[3]))
+    elseif tag==2 then v=true else v=false end
+    rawset(tb,i,v) return v
+  end})
   return K,code
 end
-local __mkproto=function(np,va,upvals,protos,s,k1,k2,chk)
-  local K,code=__vmdec(s,k1,k2,chk)
-  return {numparams=np,is_vararg=va,upvals=upvals,protos=protos,consts=K,code=code}
-end
 ]==]
+
+-- Runtime key schedule. The arithmetic MUST match profile.master_of / derive.
+-- Keys are computed at load time from the embedded seed and a per-proto salt,
+-- so the actual k1/k2 are never present as literals in the output; extracting
+-- them requires running this schedule.
+local function keysched(profile)
+  return string.format(
+    "local __ms=%d " ..
+    "local __mk=(__ms*16807+1)%%16777213 __mk=(__mk*16807+1)%%16777213 " ..
+    "local __kx=function(salt) local x=(__mk+salt)%%16777213 " ..
+    "x=(x*16807+1)%%16777213 x=(x*16807+1)%%16777213 " ..
+    "return x%%256,(math.floor(x/256)%%255)+1 end " ..
+    "local __mkproto=function(np,va,upvals,protos,s,salt,chk) " ..
+    "local k1,k2=__kx(salt) local K,code=__vmdec(s,k1,k2,chk) " ..
+    "return {numparams=np,is_vararg=va,upvals=upvals,protos=protos,consts=K,code=code} end ",
+    profile.key_seed)
+end
 
 local HEAD = [==[
 local tpack=function(...) return {n=select('#',...),...} end
@@ -181,7 +207,8 @@ local function build_dispatch(profile)
 end
 
 function M.source(profile)
-  return opcode_prelude(profile) .. DECODER .. HEAD .. build_dispatch(profile) .. "\n" .. TAIL
+  return opcode_prelude(profile) .. DECODER .. keysched(profile) ..
+         HEAD .. build_dispatch(profile) .. "\n" .. TAIL
 end
 
 return M

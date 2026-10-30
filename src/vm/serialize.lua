@@ -7,6 +7,7 @@
 -- The encoder here must mirror __vmdec in runtime.lua byte-for-byte.
 
 local runtime = require("src.vm.runtime")
+local profile_mod = require("src.vm.profile")
 
 local M = {}
 
@@ -39,11 +40,9 @@ end
 -- Encodes (consts, code) into an encrypted byte string + checksum.
 local function encode_proto_data(consts, code, perm, k1, k2)
   local bytes = {}
-  local sum = 0
   local p = 0
   local function emit_byte(pb)
     p = p + 1
-    sum = (sum + pb * (((p - 1) % 7) + 1)) % 16777213
     local key = (k1 + p * k2) % 256
     bytes[#bytes + 1] = (pb + key) % 256
   end
@@ -75,6 +74,9 @@ local function encode_proto_data(consts, code, perm, k1, k2)
     put(ins[2])
   end
 
+  -- Integrity checksum over the ENCRYPTED bytes (mirrors __vmdec).
+  local sum = 0
+  for i = 1, #bytes do sum = (sum + bytes[i] * (((i - 1) % 7) + 1)) % 16777213 end
   local chars = {}
   for i = 1, #bytes do chars[i] = string.char(bytes[i]) end
   return table.concat(chars), sum
@@ -89,24 +91,27 @@ local function ser_upvals(upvals)
   return "{" .. table.concat(parts, ",") .. "}"
 end
 
-local function ser_proto(p, profile, rng)
-  local k1 = rng:int(0, 255)
-  local k2 = rng:int(1, 255)
+local function ser_proto(p, profile, master, rng)
+  -- Keys are derived at runtime from the master + this salt; only the salt is
+  -- embedded, never k1/k2 themselves.
+  local salt = rng:int(0, 16777212)
+  local k1, k2 = profile_mod.derive(master, salt)
   local enc, chk = encode_proto_data(p.consts, p.code, profile.perm, k1, k2)
   local nested = {}
-  for i = 1, #p.protos do nested[i] = ser_proto(p.protos[i], profile, rng) end
+  for i = 1, #p.protos do nested[i] = ser_proto(p.protos[i], profile, master, rng) end
   return table.concat({
     "__mkproto(", p.numparams, ",", p.is_vararg and "true" or "false",
     ",", ser_upvals(p.upvals),
     ",{", table.concat(nested, ","), "}",
-    ",", ser_string_lit(enc), ",", k1, ",", k2, ",", chk, ")",
+    ",", ser_string_lit(enc), ",", salt, ",", chk, ")",
   })
 end
 
 function M.generate(mainproto, profile, rng)
+  local master = profile_mod.master_of(profile.key_seed)
   local parts = {}
   parts[#parts + 1] = runtime.source(profile)
-  parts[#parts + 1] = "local __VMP=" .. ser_proto(mainproto, profile, rng) .. " "
+  parts[#parts + 1] = "local __VMP=" .. ser_proto(mainproto, profile, master, rng) .. " "
   parts[#parts + 1] = "return exec(__VMP,{},(_ENV or _G),tpack(...))"
   return table.concat(parts)
 end

@@ -104,13 +104,24 @@ Advanced hardening applied to the VM (all on by default at `--level max`):
   There is no fixed signature to match and no universal devirtualizer.
 * **Encrypted bytecode stream** — each proto's instructions AND its constant
   pool (every string and number) are packed into one encrypted byte string (not
-  visible as instructions or data) and decoded at load. The structure of the
-  program is gone even from the data.
+  visible as instructions or data). The structure of the program is gone even
+  from the data.
+* **Runtime-derived keys** — the per-proto decryption keys are *not* embedded as
+  literals. Only a salt is stored; the actual keys are computed at load time by
+  a key schedule (`__kx`) from a master seed, so extracting them requires
+  running the loader, not reading a constant. (This is the technique that stops
+  static key extraction in commercial tools.)
+* **Lazy constant decryption** — constants stay encrypted after load and are
+  decrypted individually on first access (then cached) via a metatable, so
+  plaintext strings/numbers are not materialised in a table at load time
+  (Luraph `LPH_ENCSTR`-style).
 * **Per-proto rolling keys** — every function's stream uses its own key, so the
   same opcode encodes to different bytes in different functions.
 * **Randomised dispatch order** — the if/elseif branches of the interpreter are
   emitted in a shuffled, decoy-interleaved order per build, so even the VM's
   dispatch structure is polymorphic, not just the opcode numbers.
+* **Integrity checksum over the encrypted stream** — verified before any
+  decryption; editing the bytecode is caught and aborts the load.
 * **Integrity checksum (anti-tamper)** — each stream carries a checksum verified
   on decode; editing the bytecode corrupts the load instead of running modified
   logic.
@@ -125,6 +136,9 @@ Source lives in `src/vm/` (`opcodes.lua`, `profile.lua`, `desugar.lua`,
 `compiler.lua`, `runtime.lua`, `serialize.lua`). The interpreter's opcode
 constants are generated from `opcodes.lua` and the build profile, so the
 compiler and interpreter can never drift.
+
+See [COMPARISON.md](COMPARISON.md) for how these techniques line up against
+Luraph / MoonSec / IronBrew / Prometheus.
 
 ### Example
 
