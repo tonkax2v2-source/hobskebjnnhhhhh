@@ -168,6 +168,19 @@ local HANDLERS = {
   POP = "S.t=S.t-S.a",
 }
 
+-- Luau (Roblox) lacks the 5.3 bitwise operators; it provides bit32 instead.
+-- These override the operator-based handlers when targeting Luau so bitwise
+-- operations still run on Roblox. (Floor division `//` exists in Luau, so IDIV
+-- is unchanged.)
+local HANDLERS_LUAU = {
+  BAND = "local b=S.s[S.t] local x=S.s[S.t-1] S.t=S.t-1 S.s[S.t]=bit32.band(x,b)",
+  BOR = "local b=S.s[S.t] local x=S.s[S.t-1] S.t=S.t-1 S.s[S.t]=bit32.bor(x,b)",
+  BXOR = "local b=S.s[S.t] local x=S.s[S.t-1] S.t=S.t-1 S.s[S.t]=bit32.bxor(x,b)",
+  SHL = "local b=S.s[S.t] local x=S.s[S.t-1] S.t=S.t-1 S.s[S.t]=bit32.lshift(x,b)",
+  SHR = "local b=S.s[S.t] local x=S.s[S.t-1] S.t=S.t-1 S.s[S.t]=bit32.rshift(x,b)",
+  BNOT = "S.s[S.t]=bit32.bnot(S.s[S.t])",
+}
+
 -- Decoy handlers: never dispatched (their opcode numbers are never emitted),
 -- pure noise that pads the handler table like a real VM's.
 local DECOY_FORMS = {
@@ -180,14 +193,15 @@ local DECOY_FORMS = {
 
 -- Builds the handler-table assignments in the profile's randomised order.
 -- `used` (optional) restricts real handlers to the opcodes the program uses.
-local function build_handlers(profile, used)
+local function build_handlers(profile, used, target)
   local names = opcodes.NAMES
   local parts = {}
   for _, e in ipairs(profile.dispatch) do
     if e.op then
       if (not used) or used[e.op] then
         local nm = names[e.op]
-        parts[#parts + 1] = "__H[" .. nm .. "]=function(S) " .. HANDLERS[nm] .. " end"
+        local body = (target == "luau" and HANDLERS_LUAU[nm]) or HANDLERS[nm]
+        parts[#parts + 1] = "__H[" .. nm .. "]=function(S) " .. body .. " end"
       end
     else
       local frag = DECOY_FORMS[(e.decoy % #DECOY_FORMS) + 1]
@@ -197,9 +211,9 @@ local function build_handlers(profile, used)
   return table.concat(parts, " ")
 end
 
-function M.source(profile, used)
+function M.source(profile, used, target)
   return opcode_prelude(profile) .. DECODER .. keysched(profile) ..
-         PROLOGUE .. build_handlers(profile, used) .. " " .. DRIVER
+         PROLOGUE .. build_handlers(profile, used, target) .. " " .. DRIVER
 end
 
 return M

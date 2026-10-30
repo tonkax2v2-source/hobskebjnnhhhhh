@@ -11,6 +11,7 @@ Options:
     -o, --out FILE     write to FILE (default: stdout)
     -s, --seed N       deterministic seed (default: random)
     -l, --level LVL    preset: min | balanced | heavy | max  (default: balanced)
+        --target T     output target: lua (5.1-5.4/FiveM, default) | luau (Roblox)
         --vm           force-enable compilation to the bytecode VM
         --no-vm        force-disable the bytecode VM
         --cff          force-enable control-flow flattening
@@ -74,6 +75,8 @@ def build_opts(lua, args):
         opts["no_header"] = True
     if args.level:
         opts["level"] = args.level
+    if args.target:
+        opts["target"] = args.target
     if args.vm:
         opts["vm"] = True
     if args.no_vm:
@@ -111,6 +114,7 @@ def main():
     p.add_argument("-o", "--out")
     p.add_argument("-s", "--seed", type=int)
     p.add_argument("-l", "--level", choices=["min", "balanced", "heavy", "max"])
+    p.add_argument("--target", choices=["lua", "luau"])
     p.add_argument("--vm", action="store_true")
     p.add_argument("--no-vm", action="store_true")
     p.add_argument("--cff", action="store_true")

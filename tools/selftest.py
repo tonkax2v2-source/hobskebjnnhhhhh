@@ -13,10 +13,26 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 
-def make_runtime():
+# Lua 5.3+ dropped bit32; Luau provides it natively. Shim it so luau-target
+# output (which uses bit32.*) can be exercised under the lupa test host.
+_BIT32_SHIM = """
+bit32 = bit32 or {
+  band=function(a,b) return (a & b) % 4294967296 end,
+  bor=function(a,b) return (a | b) % 4294967296 end,
+  bxor=function(a,b) return (a ~ b) % 4294967296 end,
+  lshift=function(a,b) return (a << b) % 4294967296 end,
+  rshift=function(a,b) return (a >> b) % 4294967296 end,
+  bnot=function(a) return (~a) % 4294967296 end,
+}
+"""
+
+
+def make_runtime(luau=False):
     from lupa import LuaRuntime
     lua = LuaRuntime(unpack_returned_tuples=True)
     lua.execute(f'package.path = "{ROOT}/?.lua;{ROOT}/?/init.lua;" .. package.path')
+    if luau:
+        lua.execute(_BIT32_SHIM)
     return lua
 
 
@@ -42,22 +58,25 @@ def roundtrip_loads(lua, src, name):
     return ok, err, out
 
 
-def verify(src, disable=None, seed=7, level=None):
-    r1 = make_runtime()
+def verify(src, disable=None, seed=7, level=None, target=None):
+    luau = target == "luau"
+    r1 = make_runtime(luau)
     orig = deep(r1, r1.execute(src))
-    r2 = make_runtime()
+    r2 = make_runtime(luau)
     fn = r2.eval('function(src, opts) return require("src.obfuscator").obfuscate(src, opts) end')
     mk = r2.eval("function() return {} end")
     opts = mk()
     opts["seed"] = seed
     if level:
         opts["level"] = level
+    if target:
+        opts["target"] = target
     d = mk()
     for k in (disable or []):
         d[k] = True
     opts["disable"] = d
     obf = str(fn(src, opts))
-    r3 = make_runtime()
+    r3 = make_runtime(luau)
     got = deep(r3, r3.execute(obf))
     return orig == got, len(src), len(obf)
 
@@ -103,6 +122,18 @@ def main():
                 else:
                     print(f"  [XXX] {tag}  MISMATCH")
                     failures += 1
+
+    print("\n== Luau (Roblox) target: level max (VM, getfenv + bit32, no pack) ==")
+    for ex in ("examples/hello.lua", "examples/edge.lua", "examples/closures.lua"):
+        src = open(f"{ROOT}/{ex}", encoding="utf-8").read()
+        for seed in (1, 7, 1337):
+            ok, so, sz = verify(src, [], seed, "max", "luau")
+            tag = f"{ex} target=luau level=max seed={seed}"
+            if ok:
+                print(f"  [OK ] {tag}  {so}->{sz}b")
+            else:
+                print(f"  [XXX] {tag}  MISMATCH")
+                failures += 1
 
     print("\n== level presets (min / balanced / heavy / max incl. CFF, VM, pack) ==")
     for ex in ("examples/hello.lua", "examples/edge.lua", "examples/closures.lua"):

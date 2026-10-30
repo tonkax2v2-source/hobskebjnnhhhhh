@@ -8,6 +8,7 @@
 --   -o, --out FILE     write to FILE (default: stdout)
 --   -s, --seed N       deterministic seed (default: random by clock)
 --   -l, --level LVL    preset: min | balanced | heavy | max  (default: balanced)
+--       --target T     output target: lua (default) | luau (Roblox)
 --       --vm           force-enable compilation to the bytecode VM
 --       --no-vm        force-disable the bytecode VM
 --       --cff          force-enable control-flow flattening
@@ -42,6 +43,7 @@ Options:
   -o, --out FILE     write to FILE (default: stdout)
   -s, --seed N       deterministic seed (default: random by clock)
   -l, --level LVL    preset: min | balanced | heavy | max   (default: balanced)
+      --target T     output target: lua (5.1-5.4/FiveM, default) | luau (Roblox)
       --vm           force-enable compilation to the bytecode VM
       --no-vm        force-disable the bytecode VM
       --cff          force-enable control-flow flattening
@@ -64,6 +66,11 @@ Levels:
   heavy     balanced + control-flow flattening + encrypted loader
   max       compile to a custom bytecode VM, then obfuscate the VM + pack
             (lura.ph / Luraph style; strongest)
+
+Targets:
+  lua       standard Lua 5.1-5.4 / FiveM (default)
+  luau      Roblox Luau: uses getfenv + bit32, and disables the loadstring
+            based pack layer (not available on Roblox)
 ]]
 
 local function die(msg)
@@ -87,6 +94,11 @@ local function parse_args(argv)
       i = i + 1; opts.level = argv[i] or die("missing level")
       if not ({ min = 1, balanced = 1, heavy = 1, max = 1 })[opts.level] then
         die("invalid level '" .. tostring(opts.level) .. "' (min|balanced|heavy|max)")
+      end
+    elseif a == "--target" then
+      i = i + 1; opts.target = argv[i] or die("missing target")
+      if not ({ lua = 1, luau = 1 })[opts.target] then
+        die("invalid target '" .. tostring(opts.target) .. "' (lua|luau)")
       end
     elseif a == "--cff" then opts.disable.control_flow = false
     elseif a == "--no-cff" then opts.disable.control_flow = true

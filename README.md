@@ -64,6 +64,18 @@ exist, just scrambled into state machines); `max` replaces your code with
 bytecode entirely. You can also toggle each layer independently at any level:
 `--vm` / `--no-vm`, `--cff` / `--no-cff`, `--pack` / `--no-pack`.
 
+### Target platform (`--target`)
+
+| `--target` | For | Notes |
+|------------|-----|-------|
+| `lua` *(default)* | Lua 5.1–5.4, LuaJIT, FiveM (CfxLua) | full feature set incl. the `pack` loader |
+| `luau` | Roblox Luau | the VM uses `getfenv` for globals and `bit32.*` for bitwise ops; the `loadstring`-based `pack` layer is disabled automatically (Roblox has no `loadstring`) |
+
+```bash
+python3 luaobf.py --level max --target luau input.lua -o output.lua   # Roblox
+python3 luaobf.py --level max input.lua -o output.lua                 # standard Lua / FiveM
+```
+
 ---
 
 ## What it does (the passes)

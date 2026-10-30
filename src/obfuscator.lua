@@ -71,7 +71,7 @@ end
 -- Compiles the chunk to VM bytecode and returns a fresh parsed chunk of the
 -- generated interpreter+bytecode source, so the normal passes can obfuscate it
 -- as a second layer.
-local function vm_transform(chunk, rng)
+local function vm_transform(chunk, rng, target)
   local desugar = require("src.vm.desugar")
   local compiler = require("src.vm.compiler")
   local serialize = require("src.vm.serialize")
@@ -79,7 +79,7 @@ local function vm_transform(chunk, rng)
   desugar.run(chunk)
   local mainproto = compiler.compile(chunk)
   local vmprofile = profile.build(rng)
-  local vmsrc = serialize.generate(mainproto, vmprofile, rng)
+  local vmsrc = serialize.generate(mainproto, vmprofile, rng, target)
   return parser.parse(vmsrc, "vm")
 end
 
@@ -127,10 +127,14 @@ function M.obfuscate(src, opts)
       if disable[k] == nil then disable[k] = v end
     end
   end
+  local target = opts.target or "lua"
   local do_pack = opts.pack
   if do_pack == nil then do_pack = level.pack end
   local do_vm = opts.vm
   if do_vm == nil then do_vm = level.vm end
+  -- Luau/Roblox has no loadstring/load, so the encrypted-loader pack layer
+  -- cannot run there. Force it off for that target.
+  if target == "luau" then do_pack = false end
   if level.junk_density and not (opts.junk_code and opts.junk_code.density) then
     opts.junk_code = opts.junk_code or {}
     opts.junk_code.density = level.junk_density
@@ -142,7 +146,7 @@ function M.obfuscate(src, opts)
   local chunk = parser.parse(src, opts.chunkname or "input")
 
   if do_vm then
-    chunk = vm_transform(chunk, rng)
+    chunk = vm_transform(chunk, rng, target)
   end
 
   local ctx = {

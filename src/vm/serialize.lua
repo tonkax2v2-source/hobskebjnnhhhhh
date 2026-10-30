@@ -117,13 +117,17 @@ local function collect_used(proto, used)
   return used
 end
 
-function M.generate(mainproto, profile, rng)
+function M.generate(mainproto, profile, rng, target)
   local master = profile_mod.master_of(profile.key_seed)
   local used = collect_used(mainproto, {})
+  -- Luau (Roblox) has no _ENV; globals come from getfenv. Standard Lua uses
+  -- _ENV (5.2+) falling back to _G (5.1).
+  local env_expr = (target == "luau")
+    and "(getfenv and getfenv(1) or _G)" or "(_ENV or _G)"
   local parts = {}
-  parts[#parts + 1] = runtime.source(profile, used)
+  parts[#parts + 1] = runtime.source(profile, used, target)
   parts[#parts + 1] = "local __VMP=" .. ser_proto(mainproto, profile, master, rng) .. " "
-  parts[#parts + 1] = "return exec(__VMP,{},(_ENV or _G),tpack(...))"
+  parts[#parts + 1] = "return exec(__VMP,{}," .. env_expr .. ",tpack(...))"
   return table.concat(parts)
 end
 

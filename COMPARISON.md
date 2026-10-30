@@ -57,6 +57,12 @@ luaobf matches the **core architecture** of the strongest commercial tools and,
 with runtime-derived keys and lazy constant decryption, closes the gaps that
 third-party analyses cite as what actually stops static deobfuscation.
 
+luaobf targets **standard Lua 5.1–5.4 / LuaJIT / FiveM** (`--target lua`) and
+**Roblox Luau** (`--target luau`). The Luraph sample that motivated this is a
+Luau/Roblox build (it uses `buffer`, `typeof`, `getfenv`); for that target
+luaobf's VM uses `getfenv` for globals and `bit32.*` for bitwise operations,
+and drops the `loadstring`-based loader since Roblox has no `loadstring`.
+
 Remaining differences are incremental: per-function selective encryption
 (`LPH_ENCFUNC`-style) and a true dual/nested VM. Active anti-debugging and
 detection-evasion are **deliberately not implemented** — the included
