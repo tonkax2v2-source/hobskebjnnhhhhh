@@ -28,7 +28,15 @@ function M.build(rng)
   local decoys = {}
   for i = n + 1, total do decoys[#decoys + 1] = pool[i] end
 
-  return { perm = perm, decoys = decoys, total = total }
+  -- Dispatch order: the real handlers (by canonical opcode index) interleaved
+  -- with the decoy numbers, all in one shuffled sequence, so the textual order
+  -- of the if/elseif chain is randomised per build too.
+  local dispatch = {}
+  for i = 1, n do dispatch[#dispatch + 1] = { op = i } end
+  for _, d in ipairs(decoys) do dispatch[#dispatch + 1] = { decoy = d } end
+  rng:shuffle(dispatch)
+
+  return { perm = perm, decoys = decoys, total = total, dispatch = dispatch }
 end
 
 return M

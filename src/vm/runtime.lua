@@ -1,22 +1,22 @@
 -- runtime.lua
 -- Produces the SOURCE of the VM interpreter embedded into obfuscated output,
--- specialised for a per-build profile (randomised opcode numbers + decoys).
+-- specialised for a per-build profile:
+--   * randomised opcode numbers (profile.perm)
+--   * randomised dispatch branch order, interleaved with decoy handlers
+--     (profile.dispatch)
 --
--- The interpreter is a bytecode dispatch loop. It delegates closures, upvalues,
--- metatables, coroutines and GC to the host Lua; it only encodes program
--- structure. Every local is a box {v=...}; CLOSURE captures boxes so that
+-- Each proto's constants AND instruction stream are packed into one encrypted
+-- byte string (per-proto rolling key) with an integrity checksum, decoded at
+-- load by __vmdec. Nothing of the program is visible as code or constants.
+--
+-- The VM delegates closures, upvalues, metatables, coroutines, varargs,
+-- multiple returns and GC to the host Lua; every local is a box {v=...} so
 -- per-iteration closure capture is preserved.
---
--- Each proto's instruction stream is stored encrypted (per-proto rolling key)
--- and decoded at load by __vmdec, which also verifies an integrity checksum so
--- tampering with the bytecode corrupts the load.
 
 local opcodes = require("src.vm.opcodes")
 
 local M = {}
 
--- Emits `local NAME = <emitted number>` for every opcode, using the profile's
--- permutation so the numbers differ per build.
 local function opcode_prelude(profile)
   local t = {}
   for i, n in ipairs(opcodes.NAMES) do
@@ -25,33 +25,47 @@ local function opcode_prelude(profile)
   return table.concat(t, " ") .. " "
 end
 
--- The bytecode decoder + integrity check. Pure integer arithmetic (no bitwise),
--- so it runs on Lua 5.1 - 5.4.
+-- Decoder + proto assembler. Pure integer arithmetic (5.1 - 5.4 safe).
 local DECODER = [==[
 local __vmdec=function(s,k1,k2,chk)
-  local pos=0 local sum=0 local sb=string.byte
+  local pos=0 local sum=0 local sb=string.byte local sc=string.char
+  local function gb()
+    pos=pos+1
+    local pb=(sb(s,pos)-(k1+pos*k2))%256
+    sum=(sum+pb*(((pos-1)%7)+1))%16777213
+    return pb
+  end
   local function g()
-    local p=pos
-    local b0=(sb(s,p+1)-(k1+(p+1)*k2))%256
-    local b1=(sb(s,p+2)-(k1+(p+2)*k2))%256
-    local b2=(sb(s,p+3)-(k1+(p+3)*k2))%256
-    local b3=(sb(s,p+4)-(k1+(p+4)*k2))%256
-    pos=p+4
-    sum=(sum+b0+b1*2+b2*3+b3*4)%16777213
+    local b0=gb() local b1=gb() local b2=gb() local b3=gb()
     local n=b0+256*(b1+256*(b2+256*b3))
     if n>=2147483648 then n=n-4294967296 end
     return n
   end
-  local cnt=g()
+  local function gstr()
+    local len=g() local t={} for i=1,len do t[i]=sc(gb()) end return table.concat(t)
+  end
+  local kcount=g()
+  local K={}
+  for i=1,kcount do
+    local tag=gb()
+    if tag==0 then K[i]=gstr()
+    elseif tag==1 then K[i]=tonumber(gstr())
+    elseif tag==2 then K[i]=true
+    elseif tag==3 then K[i]=false end
+  end
+  local ccount=g()
   local code={}
-  for i=1,cnt do local o=g() local a=g() code[i]={o,a} end
+  for i=1,ccount do local o=g() local a=g() code[i]={o,a} end
   if sum~=chk then return error("integrity") end
-  return code
+  return K,code
+end
+local __mkproto=function(np,va,upvals,protos,s,k1,k2,chk)
+  local K,code=__vmdec(s,k1,k2,chk)
+  return {numparams=np,is_vararg=va,upvals=upvals,protos=protos,consts=K,code=code}
 end
 ]==]
 
--- Interpreter body. `-- @DECOYS@` is where decoy branches are spliced in.
-local BODY = [==[
+local HEAD = [==[
 local tpack=function(...) return {n=select('#',...),...} end
 local tunpack=table.unpack or unpack
 local exec
@@ -72,110 +86,102 @@ exec=function(proto,upvals,ENV,argpack)
   local pc=1
   while true do
     local ins=code[pc] local op=ins[1] local a=ins[2] pc=pc+1
-    if op==PUSHK then top=top+1 stk[top]=K[a]
-    elseif op==PUSHNIL then top=top+1 stk[top]=nil
-    elseif op==PUSHTRUE then top=top+1 stk[top]=true
-    elseif op==PUSHFALSE then top=top+1 stk[top]=false
-    elseif op==PUSHVARARG then
-      if a==-1 then for i=1,van do top=top+1 stk[top]=va[i] end
-      else for i=1,a do top=top+1 stk[top]=va[i] end end
-    elseif op==NEWLOCAL then local v=stk[top] top=top-1 frame[a]={v=v}
-    elseif op==DECLLOCAL then frame[a]={v=nil}
-    elseif op==GETLOCAL then top=top+1 stk[top]=frame[a].v
-    elseif op==SETLOCAL then frame[a].v=stk[top] top=top-1
-    elseif op==GETUPVAL then top=top+1 stk[top]=upvals[a].v
-    elseif op==SETUPVAL then upvals[a].v=stk[top] top=top-1
-    elseif op==GETGLOBAL then top=top+1 stk[top]=ENV[K[a]]
-    elseif op==SETGLOBAL then ENV[K[a]]=stk[top] top=top-1
-    elseif op==GETTABLE then local k=stk[top] local t=stk[top-1] top=top-1 stk[top]=t[k]
-    elseif op==SETTABLE then local v=stk[top] local k=stk[top-1] local t=stk[top-2] top=top-3 t[k]=v
-    elseif op==NEWTABLE then top=top+1 stk[top]={}
-    elseif op==SETINDEXK then local v=stk[top] local t=stk[top-1] top=top-2 t[K[a]]=v
-    elseif op==SETINDEXI then local v=stk[top] local t=stk[top-1] top=top-2 t[a]=v
-    elseif op==SETLIST then
-      local base=marks[mtop] mtop=mtop-1 local t=stk[base]
-      for i=base+1,top do t[a+(i-base)]=stk[i] end
-      top=base-1
-    elseif op==SELF then local t=stk[top] local m=t[K[a]] stk[top]=m top=top+1 stk[top]=t
-    elseif op==OPENFRAME then mtop=mtop+1 marks[mtop]=top
-    elseif op==ADJUST then
-      local base=marks[mtop] mtop=mtop-1 local have=top-base
-      if have<a then for i=have+1,a do top=top+1 stk[top]=nil end
-      elseif have>a then top=base+a end
-    elseif op==CALL then
-      local base=marks[mtop] mtop=mtop-1
-      local fn=stk[base+1] local n=top-base-1
-      local args={} for i=1,n do args[i]=stk[base+1+i] end
-      top=base
-      local rets=tpack(fn(tunpack(args,1,n)))
-      if a==-1 then for i=1,rets.n do top=top+1 stk[top]=rets[i] end
-      elseif a~=0 then for i=1,a do top=top+1 stk[top]=rets[i] end end
-    elseif op==RETURN then
-      local base=marks[mtop] mtop=mtop-1 local n=top-base
-      local r={} for i=1,n do r[i]=stk[base+i] end
-      return tunpack(r,1,n)
-    elseif op==RETURN0 then return
-    elseif op==CLOSURE then
-      local p2=protos[a] local desc=p2.upvals local ups={}
-      for i=1,#desc do local d=desc[i]
-        if d.kind=="local" then ups[i]=frame[d.index] else ups[i]=upvals[d.index] end
-      end
-      top=top+1 stk[top]=function(...) return exec(p2,ups,ENV,tpack(...)) end
-    elseif op==ADD then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x+b
-    elseif op==SUB then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x-b
-    elseif op==MUL then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x*b
-    elseif op==DIV then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x/b
-    elseif op==MOD then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x%b
-    elseif op==POW then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x^b
-    elseif op==IDIV then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x//b
-    elseif op==CONCAT then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x..b
-    elseif op==BAND then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x&b
-    elseif op==BOR then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x|b
-    elseif op==BXOR then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x~b
-    elseif op==SHL then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x<<b
-    elseif op==SHR then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x>>b
-    elseif op==EQ then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x==b)
-    elseif op==NE then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x~=b)
-    elseif op==LT then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x<b)
-    elseif op==LE then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x<=b)
-    elseif op==GT then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x>b)
-    elseif op==GE then local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x>=b)
-    elseif op==NEG then stk[top]=-stk[top]
-    elseif op==NOT then stk[top]=not stk[top]
-    elseif op==LEN then stk[top]=#stk[top]
-    elseif op==BNOT then stk[top]=~stk[top]
-    elseif op==JMP then pc=a
-    elseif op==JMPIFFALSE then local v=stk[top] top=top-1 if not v then pc=a end
-    elseif op==JMPIFTRUE then local v=stk[top] top=top-1 if v then pc=a end
-    elseif op==JMPIFFALSEK then if not stk[top] then pc=a else top=top-1 end
-    elseif op==JMPIFTRUEK then if stk[top] then pc=a else top=top-1 end
-    elseif op==POP then top=top-a
--- @DECOYS@
+]==]
+
+local TAIL = [==[
     end
   end
 end
 ]==]
 
--- Builds decoy branches: harmless stack no-ops for opcode numbers the compiler
--- never emits, so they are pure noise in the dispatch.
-local function decoy_branches(profile)
-  local t = {}
-  for _, num in ipairs(profile.decoys) do
-    local forms = {
-      "    elseif op==" .. num .. " then top=top+1 stk[top]=a top=top-1",
-      "    elseif op==" .. num .. " then local _=marks[mtop]",
-      "    elseif op==" .. num .. " then stk[top+1]=a",
-      "    elseif op==" .. num .. " then pc=pc+0",
-    }
-    t[#t + 1] = forms[(num % #forms) + 1]
+-- Per-opcode handler bodies (statements only; no `then`).
+local HANDLERS = {
+  PUSHK = "top=top+1 stk[top]=K[a]",
+  PUSHNIL = "top=top+1 stk[top]=nil",
+  PUSHTRUE = "top=top+1 stk[top]=true",
+  PUSHFALSE = "top=top+1 stk[top]=false",
+  PUSHVARARG = "if a==-1 then for i=1,van do top=top+1 stk[top]=va[i] end else for i=1,a do top=top+1 stk[top]=va[i] end end",
+  NEWLOCAL = "local v=stk[top] top=top-1 frame[a]={v=v}",
+  DECLLOCAL = "frame[a]={v=nil}",
+  GETLOCAL = "top=top+1 stk[top]=frame[a].v",
+  SETLOCAL = "frame[a].v=stk[top] top=top-1",
+  GETUPVAL = "top=top+1 stk[top]=upvals[a].v",
+  SETUPVAL = "upvals[a].v=stk[top] top=top-1",
+  GETGLOBAL = "top=top+1 stk[top]=ENV[K[a]]",
+  SETGLOBAL = "ENV[K[a]]=stk[top] top=top-1",
+  GETTABLE = "local k=stk[top] local t=stk[top-1] top=top-1 stk[top]=t[k]",
+  SETTABLE = "local v=stk[top] local k=stk[top-1] local t=stk[top-2] top=top-3 t[k]=v",
+  NEWTABLE = "top=top+1 stk[top]={}",
+  SETINDEXK = "local v=stk[top] local t=stk[top-1] top=top-2 t[K[a]]=v",
+  SETINDEXI = "local v=stk[top] local t=stk[top-1] top=top-2 t[a]=v",
+  SETLIST = "local base=marks[mtop] mtop=mtop-1 local t=stk[base] for i=base+1,top do t[a+(i-base)]=stk[i] end top=base-1",
+  SELF = "local t=stk[top] local m=t[K[a]] stk[top]=m top=top+1 stk[top]=t",
+  OPENFRAME = "mtop=mtop+1 marks[mtop]=top",
+  ADJUST = "local base=marks[mtop] mtop=mtop-1 local have=top-base if have<a then for i=have+1,a do top=top+1 stk[top]=nil end elseif have>a then top=base+a end",
+  CALL = "local base=marks[mtop] mtop=mtop-1 local fn=stk[base+1] local n=top-base-1 local args={} for i=1,n do args[i]=stk[base+1+i] end top=base local rets=tpack(fn(tunpack(args,1,n))) if a==-1 then for i=1,rets.n do top=top+1 stk[top]=rets[i] end elseif a~=0 then for i=1,a do top=top+1 stk[top]=rets[i] end end",
+  RETURN = "local base=marks[mtop] mtop=mtop-1 local n=top-base local r={} for i=1,n do r[i]=stk[base+i] end return tunpack(r,1,n)",
+  RETURN0 = "return",
+  CLOSURE = "local p2=protos[a] local desc=p2.upvals local ups={} for i=1,#desc do local d=desc[i] if d.kind=='local' then ups[i]=frame[d.index] else ups[i]=upvals[d.index] end end top=top+1 stk[top]=function(...) return exec(p2,ups,ENV,tpack(...)) end",
+  ADD = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x+b",
+  SUB = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x-b",
+  MUL = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x*b",
+  DIV = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x/b",
+  MOD = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x%b",
+  POW = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x^b",
+  IDIV = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x//b",
+  CONCAT = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x..b",
+  BAND = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x&b",
+  BOR = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x|b",
+  BXOR = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x~b",
+  SHL = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x<<b",
+  SHR = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=x>>b",
+  EQ = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x==b)",
+  NE = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x~=b)",
+  LT = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x<b)",
+  LE = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x<=b)",
+  GT = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x>b)",
+  GE = "local b=stk[top] local x=stk[top-1] top=top-1 stk[top]=(x>=b)",
+  NEG = "stk[top]=-stk[top]",
+  NOT = "stk[top]=not stk[top]",
+  LEN = "stk[top]=#stk[top]",
+  BNOT = "stk[top]=~stk[top]",
+  JMP = "pc=a",
+  JMPIFFALSE = "local v=stk[top] top=top-1 if not v then pc=a end",
+  JMPIFTRUE = "local v=stk[top] top=top-1 if v then pc=a end",
+  JMPIFFALSEK = "if not stk[top] then pc=a else top=top-1 end",
+  JMPIFTRUEK = "if stk[top] then pc=a else top=top-1 end",
+  POP = "top=top-a",
+}
+
+local DECOY_FORMS = {
+  "top=top+1 stk[top]=a top=top-1",
+  "local _=marks[mtop]",
+  "stk[top+1]=a",
+  "pc=pc+0",
+  "local _=K[1]",
+}
+
+-- Builds the dispatch chain in the profile's randomised order.
+local function build_dispatch(profile)
+  local names = opcodes.NAMES
+  local parts = {}
+  local first = true
+  for _, e in ipairs(profile.dispatch) do
+    local kw = first and "    if " or "    elseif "
+    first = false
+    if e.op then
+      local nm = names[e.op]
+      parts[#parts + 1] = kw .. "op==" .. nm .. " then " .. HANDLERS[nm]
+    else
+      local frag = DECOY_FORMS[(e.decoy % #DECOY_FORMS) + 1]
+      parts[#parts + 1] = kw .. "op==" .. e.decoy .. " then " .. frag
+    end
   end
-  return table.concat(t, "\n")
+  return table.concat(parts, "\n")
 end
 
--- Returns the interpreter source for a given profile.
 function M.source(profile)
-  local body = BODY:gsub("%-%- @DECOYS@", (decoy_branches(profile):gsub("%%", "%%%%")))
-  return opcode_prelude(profile) .. DECODER .. body
+  return opcode_prelude(profile) .. DECODER .. HEAD .. build_dispatch(profile) .. "\n" .. TAIL
 end
 
 return M

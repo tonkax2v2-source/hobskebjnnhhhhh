@@ -102,11 +102,15 @@ Advanced hardening applied to the VM (all on by default at `--level max`):
 * **Per-build opcode shuffling** — the numeric opcode assignment is randomised
   every build from the seed, so two obfuscations share no recognisable VM.
   There is no fixed signature to match and no universal devirtualizer.
-* **Encrypted bytecode stream** — each proto's instructions are packed into an
-  encrypted byte string (not visible as instructions) and decoded at load. The
-  structure of the program is gone even from the data.
+* **Encrypted bytecode stream** — each proto's instructions AND its constant
+  pool (every string and number) are packed into one encrypted byte string (not
+  visible as instructions or data) and decoded at load. The structure of the
+  program is gone even from the data.
 * **Per-proto rolling keys** — every function's stream uses its own key, so the
   same opcode encodes to different bytes in different functions.
+* **Randomised dispatch order** — the if/elseif branches of the interpreter are
+  emitted in a shuffled, decoy-interleaved order per build, so even the VM's
+  dispatch structure is polymorphic, not just the opcode numbers.
 * **Integrity checksum (anti-tamper)** — each stream carries a checksum verified
   on decode; editing the bytecode corrupts the load instead of running modified
   logic.
