@@ -48,7 +48,7 @@ feeding the decryptor, and per-build polymorphism.
 | Control-flow flattening | yes | yes (source level, `heavy`/`max`) |
 | Decoy handlers / junk | yes | **yes** |
 | Encrypted loader / stacked decode | yes | **yes** (`pack`) |
-| Per-function selective encryption (ENCFUNC) | yes | not yet |
+| Per-function selective encryption (ENCFUNC) | yes | **yes** (`LPH_ENCFUNC` / `ENCFUNC`) |
 | Active anti-debugger / detection-evasion | some | **intentionally omitted** |
 
 ## Honest assessment
@@ -63,10 +63,11 @@ Luau/Roblox build (it uses `buffer`, `typeof`, `getfenv`); for that target
 luaobf's VM uses `getfenv` for globals and `bit32.*` for bitwise operations,
 and drops the `loadstring`-based loader since Roblox has no `loadstring`.
 
-Remaining differences are incremental: per-function selective encryption
-(`LPH_ENCFUNC`-style) and a true dual/nested VM. Active anti-debugging and
-detection-evasion are **deliberately not implemented** — the included
-anti-tamper is a benign load-time integrity check of your own bytecode.
+Remaining differences are incremental: a true dual/nested VM, and using Luau's
+native `buffer` type for the bytecode (luaobf uses a string, which runs the
+same). Active anti-debugging and detection-evasion are **deliberately not
+implemented** — the included anti-tamper is a benign load-time integrity check
+of your own bytecode.
 
 **No obfuscator is unbreakable.** Luraph v15, MoonSec V3 and IronBrew all have
 public deobfuscators/devirtualizers; obfuscation raises the cost of analysis, it

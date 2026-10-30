@@ -29,6 +29,18 @@ local function is_multi(e)
   return k == "CallExpr" or k == "MethodCallExpr" or k == "VarargExpr"
 end
 
+-- Recognises the per-function encryption macro: LPH_ENCFUNC(function ... end)
+-- or ENCFUNC(function ... end). Matched by name regardless of whether a local
+-- no-op fallback (`local LPH_ENCFUNC = LPH_ENCFUNC or function(f) return f end`)
+-- shadows it, since the name is a reserved compile-time marker.
+local function is_encfunc_call(node)
+  if node.kind ~= "CallExpr" then return false end
+  local f = node.func
+  if f.kind ~= "NameExpr" then return false end
+  if f.name ~= "LPH_ENCFUNC" and f.name ~= "ENCFUNC" then return false end
+  return #node.args == 1 and node.args[1].kind == "FunctionExpr"
+end
+
 local BINOP = {
   ["+"] = OP.ADD, ["-"] = OP.SUB, ["*"] = OP.MUL, ["/"] = OP.DIV,
   ["%"] = OP.MOD, ["^"] = OP.POW, ["//"] = OP.IDIV, [".."] = OP.CONCAT,
@@ -47,7 +59,7 @@ local function new_proto(parent)
 end
 
 function Compiler.new()
-  return setmetatable({ proto = nil }, Compiler)
+  return setmetatable({ proto = nil, enc = false }, Compiler)
 end
 
 ----------------------------------------------------------------------
@@ -147,7 +159,12 @@ function Compiler:expr(node, want)
   elseif k == "ParenExpr" then self:expr(node.expr, 1)
   elseif k == "IndexExpr" then
     self:expr(node.obj, 1); self:expr(node.index, 1); self:emit(OP.GETTABLE)
-  elseif k == "CallExpr" then self:compile_call(node, want == -1 and -1 or 1)
+  elseif k == "CallExpr" then
+    if is_encfunc_call(node) then
+      self:compile_closure(node.args[1], true)       -- encrypted function, 1 value
+    else
+      self:compile_call(node, want == -1 and -1 or 1)
+    end
   elseif k == "MethodCallExpr" then self:compile_methodcall(node, want == -1 and -1 or 1)
   elseif k == "FunctionExpr" then self:compile_closure(node)
   elseif k == "TableExpr" then self:compile_table(node)
@@ -193,8 +210,8 @@ function Compiler:compile_methodcall(node, nret)
   self:emit(OP.CALL, nret)
 end
 
-function Compiler:compile_closure(node)
-  local proto = self:compile_function(node, self.proto)
+function Compiler:compile_closure(node, encrypted)
+  local proto = self:compile_function(node, self.proto, encrypted)
   local idx = #self.proto.protos + 1
   self.proto.protos[idx] = proto
   self:emit(OP.CLOSURE, idx)
@@ -290,7 +307,10 @@ function Compiler:compile_stat(s)
     end
 
   elseif k == "CallStat" then
-    if s.call.kind == "MethodCallExpr" then
+    if is_encfunc_call(s.call) then
+      self:compile_closure(s.call.args[1], true)     -- builds the closure...
+      self:emit(OP.POP, 1)                            -- ...and discards it (statement)
+    elseif s.call.kind == "MethodCallExpr" then
       self:compile_methodcall(s.call, 0)
     else
       self:compile_call(s.call, 0)
@@ -420,10 +440,14 @@ function Compiler:finalize_proto(proto)
   end
 end
 
-function Compiler:compile_function(node, parent)
+function Compiler:compile_function(node, parent, encrypted)
   local proto = new_proto(parent)
+  -- An encrypted function encrypts its descendants too (like LPH_ENCFUNC).
+  proto.encrypted = encrypted or self.enc or false
   local saved = self.proto
+  local saved_enc = self.enc
   self.proto = proto
+  self.enc = proto.encrypted
   proto.is_vararg = node.is_vararg and true or false
   for _, p in ipairs(node.params) do self:declare(p) end
   proto.numparams = #node.params
@@ -431,6 +455,7 @@ function Compiler:compile_function(node, parent)
   self:emit(OP.RETURN0)
   self:finalize_proto(proto)
   self.proto = saved
+  self.enc = saved_enc
   return proto
 end
 

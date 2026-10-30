@@ -155,6 +155,25 @@ compiler and interpreter can never drift.
 See [COMPARISON.md](COMPARISON.md) for how these techniques line up against
 Luraph / MoonSec / IronBrew / Prometheus.
 
+### Per-function encryption (`LPH_ENCFUNC`)
+
+Wrap a function to give it (and every function nested inside it) an **extra
+encryption layer that is decrypted lazily, only when that function is first
+called** — so a function that never runs is never decrypted. This mirrors
+Luraph's `LPH_ENCFUNC`.
+
+```lua
+-- optional no-op fallback so the file still runs unobfuscated
+local LPH_ENCFUNC = LPH_ENCFUNC or function(f) return f end
+
+local secret = LPH_ENCFUNC(function(key)
+  ...                      -- this body is double-encrypted and lazily decoded
+end)
+```
+
+The macro is recognised by name (`LPH_ENCFUNC` or `ENCFUNC`) at `--level max`
+(the VM path). At other levels it is simply unwrapped so the code still runs.
+
 ### Example
 
 Input:

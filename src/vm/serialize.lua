@@ -91,6 +91,14 @@ local function ser_upvals(upvals)
   return "{" .. table.concat(parts, ",") .. "}"
 end
 
+-- Applies an extra keystream over an already-encrypted stream (the outer layer
+-- for LPH_ENCFUNC-style protos). Mirrors the strip loop in exec.
+local function outer_encrypt(s, k1b, k2b)
+  local t = {}
+  for i = 1, #s do t[i] = string.char((s:byte(i) + (k1b + i * k2b)) % 256) end
+  return table.concat(t)
+end
+
 local function ser_proto(p, profile, master, rng)
   -- Keys are derived at runtime from the master + this salt; only the salt is
   -- embedded, never k1/k2 themselves.
@@ -99,10 +107,23 @@ local function ser_proto(p, profile, master, rng)
   local enc, chk = encode_proto_data(p.consts, p.code, profile.perm, k1, k2)
   local nested = {}
   for i = 1, #p.protos do nested[i] = ser_proto(p.protos[i], profile, master, rng) end
+  local nested_str = "{" .. table.concat(nested, ",") .. "}"
+
+  if p.encrypted then
+    -- Extra outer encryption layer + lazy, decode-on-first-call (__encproto).
+    local salt2 = rng:int(0, 16777212)
+    local k1b, k2b = profile_mod.derive(master, salt2)
+    local enc2 = outer_encrypt(enc, k1b, k2b)
+    return table.concat({
+      "__encproto(", p.numparams, ",", p.is_vararg and "true" or "false",
+      ",", ser_upvals(p.upvals), ",", nested_str,
+      ",", ser_string_lit(enc2), ",", salt, ",", salt2, ",", chk, ")",
+    })
+  end
+
   return table.concat({
     "__mkproto(", p.numparams, ",", p.is_vararg and "true" or "false",
-    ",", ser_upvals(p.upvals),
-    ",{", table.concat(nested, ","), "}",
+    ",", ser_upvals(p.upvals), ",", nested_str,
     ",", ser_string_lit(enc), ",", salt, ",", chk, ")",
   })
 end

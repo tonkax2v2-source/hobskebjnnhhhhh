@@ -79,7 +79,12 @@ local function keysched(profile)
     "return x%%256,(math.floor(x/256)%%255)+1 end " ..
     "local __mkproto=function(np,va,upvals,protos,s,salt,chk) " ..
     "local k1,k2=__kx(salt) local K,code=__vmdec(s,k1,k2,chk) " ..
-    "return {numparams=np,is_vararg=va,upvals=upvals,protos=protos,consts=K,code=code} end ",
+    "return {numparams=np,is_vararg=va,upvals=upvals,protos=protos,consts=K,code=code} end " ..
+    -- Encrypted (LPH_ENCFUNC-style) proto: stored with an extra outer key layer,
+    -- NOT decoded here. exec decrypts it lazily on first call (see DRIVER), so a
+    -- function that is never called is never decrypted.
+    "local __encproto=function(np,va,upvals,protos,s,s1,s2,chk) " ..
+    "return {numparams=np,is_vararg=va,upvals=upvals,protos=protos,__e=s,__a=s1,__b=s2,__c=chk} end ",
     profile.key_seed)
 end
 
@@ -94,6 +99,13 @@ local __H={}
 
 local DRIVER = [==[
 exec=function(proto,upvals,ENV,argpack)
+  if proto.__e and not proto.code then
+    local k1,k2=__kx(proto.__a) local kb1,kb2=__kx(proto.__b)
+    local e=proto.__e local sb=string.byte local sc=string.char local tt={}
+    for pp=1,#e do tt[pp]=sc((sb(e,pp)-(kb1+pp*kb2))%256) end
+    local K,code=__vmdec(table.concat(tt),k1,k2,proto.__c)
+    proto.consts=K proto.code=code
+  end
   local S={c=proto.code,k=proto.consts,p=proto.protos,u=upvals,e=ENV,
            f={},s={},t=0,m={},mt=0,pc=1,v={},vn=0}
   local np=proto.numparams

@@ -124,7 +124,7 @@ def main():
                     failures += 1
 
     print("\n== Luau (Roblox) target: level max (VM, getfenv + bit32, no pack) ==")
-    for ex in ("examples/hello.lua", "examples/edge.lua", "examples/closures.lua"):
+    for ex in ("examples/hello.lua", "examples/edge.lua", "examples/closures.lua", "examples/encfunc.lua"):
         src = open(f"{ROOT}/{ex}", encoding="utf-8").read()
         for seed in (1, 7, 1337):
             ok, so, sz = verify(src, [], seed, "max", "luau")
@@ -136,7 +136,7 @@ def main():
                 failures += 1
 
     print("\n== level presets (min / balanced / heavy / max incl. CFF, VM, pack) ==")
-    for ex in ("examples/hello.lua", "examples/edge.lua", "examples/closures.lua"):
+    for ex in ("examples/hello.lua", "examples/edge.lua", "examples/closures.lua", "examples/encfunc.lua"):
         src = open(f"{ROOT}/{ex}", encoding="utf-8").read()
         for level in ("min", "balanced", "heavy", "max"):
             for seed in (1, 7, 1337):

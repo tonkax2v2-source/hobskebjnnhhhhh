@@ -14,6 +14,7 @@ local M = {}
 -- Pass registry in default execution order. Order matters: renaming runs
 -- before constant extraction, string encryption before VM wrapping, etc.
 local PASS_ORDER = {
+  "strip_encfunc",
   "encrypt_strings",
   "number_mangle",
   "rename_vars",
@@ -85,7 +86,7 @@ end
 
 -- Level presets. Explicit opts (passes/disable/pack/vm) always win.
 local LEVELS = {
-  min = { passes = { "rename_vars" } },
+  min = { passes = { "strip_encfunc", "rename_vars" } },
   balanced = {
     disable = { control_flow = true },
     pack = false,
