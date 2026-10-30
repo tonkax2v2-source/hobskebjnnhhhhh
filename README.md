@@ -43,20 +43,26 @@ Both CLIs accept the same options.
 |-----------|-----------|--------------|
 | `min` | variable renaming only | ~1.3× |
 | `balanced` *(default)* | renaming + string encryption + number mangling + constant array + junk code + IIFE wrap | ~3× |
-| `max` | everything above **+ control-flow flattening + an encrypted runtime loader** | ~20–30× |
+| `heavy` | balanced **+ control-flow flattening + encrypted loader** | ~20–30× |
+| `max` | **compile to a custom bytecode VM**, then obfuscate the VM itself and wrap it in the encrypted loader (lura.ph / Luraph style; strongest) | ~50–80× |
 
-At `--level max` the entire program is flattened into state machines and then
-encrypted into a blob that is decoded and `load()`-ed at runtime, so the output
-contains no readable code or strings at all:
+At `--level max` the program is compiled to a **custom bytecode virtual
+machine**: your logic becomes data (an instruction array + constant pool)
+executed by an embedded interpreter dispatch loop. The original control flow,
+expressions and structure are gone — there is no Lua resembling your code left
+to read. That VM is then itself run through the balanced passes (so even the
+bytecode's string constants are encrypted and the interpreter is renamed) and
+finally sealed in the encrypted loader:
 
 ```lua
-local I0III1=function(s,a,b) ... end            -- tiny arithmetic decoder
+local I0III1=function(s,a,b) ... end        -- tiny arithmetic decoder
 return assert((loadstring or load)(I0III1("\221M\217W\209Jy\254...",171,88)))(...)
 ```
 
-You can also toggle the two heavy layers independently at any level:
-`--cff` / `--no-cff` (control-flow flattening) and `--pack` / `--no-pack`
-(encrypted loader).
+`heavy` is flattening + packing at the **source** level (your statements still
+exist, just scrambled into state machines); `max` replaces your code with
+bytecode entirely. You can also toggle each layer independently at any level:
+`--vm` / `--no-vm`, `--cff` / `--no-cff`, `--pack` / `--no-pack`.
 
 ---
 
@@ -73,7 +79,27 @@ The pipeline runs these passes in order. Each is individually switchable.
 | **control_flow** | `--no-cff` (max only) | Flattens each straight-line statement sequence into a shuffled state-machine dispatcher (`while true do if V==... end end`), so textual order no longer reflects execution order. |
 | **junk_code** | `--no-junk` | Inserts dead branches guarded by opaque always-false predicates built from constant arithmetic. Harmless and never executed. |
 | **finalize** | `--no-wrap` | Wraps the whole program in an immediately-invoked vararg closure `return (function(...) ... end)(...)`, forwarding arguments and return values. |
-| **pack** *(loader)* | `--no-pack` (max only) | Encrypts the whole generated chunk and emits a runtime loader that decodes and `load()`s it. The program never appears as source. |
+| **pack** *(loader)* | `--no-pack` | Encrypts the whole generated chunk and emits a runtime loader that decodes and `load()`s it. The program never appears as source. |
+
+### The bytecode VM (`--vm`, enabled by `--level max`)
+
+The strongest layer compiles the program to a **custom instruction set** and
+ships a small interpreter that runs it — exactly the approach commercial
+protectors like Luraph / lura.ph use.
+
+* Each Lua function becomes a *proto*: a numeric `code` array, a `consts` pool,
+  nested protos, and upvalue descriptors.
+* A stack-based dispatch loop executes the opcodes. `for` loops are lowered to
+  `while` + locals first, so the VM only handles a small core.
+* **Correctness is structural, not re-implemented:** the VM delegates closures,
+  upvalues, metatables, coroutines, varargs, multiple returns and GC to the host
+  Lua. Every local is a boxed cell `{v=...}` allocated fresh on each scope entry,
+  so closures capture exactly the right instance per iteration. A frame-marker
+  stack handles variadic regions (`f(g())`, `{...}`, `return f()`).
+
+Source lives in `src/vm/` (`opcodes.lua`, `desugar.lua`, `compiler.lua`,
+`runtime.lua`, `serialize.lua`). The interpreter's opcode constants are
+generated from `opcodes.lua`, so the compiler and interpreter can never drift.
 
 ### Example
 
@@ -158,6 +184,8 @@ src/
   passes/               one module per transformation
                         (encrypt_strings, number_mangle, rename_vars,
                          control_flow, const_array, junk_code, finalize)
+  vm/                   bytecode VM: opcodes, desugar, compiler,
+                        runtime (interpreter), serialize
 examples/
   hello.lua, edge.lua   sample inputs (edge.lua stresses tricky syntax)
 tools/
@@ -197,10 +225,16 @@ escape boundaries, `<const>`/`<close>` attributes, varargs, and upvalue capture.
 
 ## Limitations
 
-* It's a **source** obfuscator, not a bytecode VM. It raises the cost of reading
-  and casual copying significantly, but a determined analyst with the runtime
-  can still recover logic — true of every obfuscator.
+* No obfuscator is unbreakable. `max` raises the cost enormously — an analyst
+  must recover your logic from a custom bytecode by understanding the embedded
+  VM — but a determined reverser with the runtime can still, in principle, trace
+  execution. This is true of every obfuscator, including the commercial ones.
 * `load`/`loadstring` of *dynamically built* code inside your script is not
   itself obfuscated (only the literal that builds it).
-* Debug info (`debug.getlocal`, variable names in tracebacks) is intentionally
-  destroyed by renaming.
+* Debug info (`debug.getlocal`, variable names in tracebacks, accurate line
+  numbers) is intentionally destroyed; at `--level max` stack traces point into
+  the VM, not your source.
+* `<close>` (to-be-closed) variables are not supported by the VM path (`max`);
+  use `heavy` for code that relies on them.
+* The VM adds interpretation overhead, so `max` is best for protecting logic
+  that isn't in a tight performance-critical inner loop.

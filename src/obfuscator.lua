@@ -68,16 +68,38 @@ local function pack(code, rng, namegen)
   return loader
 end
 
--- Level presets. Explicit opts (passes/disable/pack) always win.
+-- Compiles the chunk to VM bytecode and returns a fresh parsed chunk of the
+-- generated interpreter+bytecode source, so the normal passes can obfuscate it
+-- as a second layer.
+local function vm_transform(chunk)
+  local desugar = require("src.vm.desugar")
+  local compiler = require("src.vm.compiler")
+  local serialize = require("src.vm.serialize")
+  desugar.run(chunk)
+  local mainproto = compiler.compile(chunk)
+  local vmsrc = serialize.generate(mainproto)
+  return parser.parse(vmsrc, "vm")
+end
+
+-- Level presets. Explicit opts (passes/disable/pack/vm) always win.
 local LEVELS = {
   min = { passes = { "rename_vars" } },
   balanced = {
     disable = { control_flow = true },
     pack = false,
   },
-  max = {
+  -- Source-level heavy: control-flow flattening + encrypted loader.
+  heavy = {
     pack = true,
     junk_density = 0.9,
+  },
+  -- lura.ph-style: compile to a custom bytecode VM, then obfuscate the VM
+  -- (rename + encrypt the bytecode strings + junk) and wrap in the loader.
+  max = {
+    vm = true,
+    pack = true,
+    disable = { control_flow = true },
+    junk_density = 0.6,
   },
 }
 
@@ -105,6 +127,8 @@ function M.obfuscate(src, opts)
   end
   local do_pack = opts.pack
   if do_pack == nil then do_pack = level.pack end
+  local do_vm = opts.vm
+  if do_vm == nil then do_vm = level.vm end
   if level.junk_density and not (opts.junk_code and opts.junk_code.density) then
     opts.junk_code = opts.junk_code or {}
     opts.junk_code.density = level.junk_density
@@ -114,6 +138,10 @@ function M.obfuscate(src, opts)
   local namegen = util.new_namegen(rng, { style = opts.name_style })
 
   local chunk = parser.parse(src, opts.chunkname or "input")
+
+  if do_vm then
+    chunk = vm_transform(chunk)
+  end
 
   local ctx = {
     rng = rng,

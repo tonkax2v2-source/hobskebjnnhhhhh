@@ -7,7 +7,9 @@
 -- Options:
 --   -o, --out FILE     write to FILE (default: stdout)
 --   -s, --seed N       deterministic seed (default: random by clock)
---   -l, --level LVL    preset: min | balanced | max   (default: balanced)
+--   -l, --level LVL    preset: min | balanced | heavy | max  (default: balanced)
+--       --vm           force-enable compilation to the bytecode VM
+--       --no-vm        force-disable the bytecode VM
 --       --cff          force-enable control-flow flattening
 --       --no-cff       force-disable control-flow flattening
 --       --pack         force-enable the encrypted loader layer
@@ -39,7 +41,9 @@ Usage: lua luaobf.lua [options] <input.lua> [-o output.lua]
 Options:
   -o, --out FILE     write to FILE (default: stdout)
   -s, --seed N       deterministic seed (default: random by clock)
-  -l, --level LVL    preset: min | balanced | max   (default: balanced)
+  -l, --level LVL    preset: min | balanced | heavy | max   (default: balanced)
+      --vm           force-enable compilation to the bytecode VM
+      --no-vm        force-disable the bytecode VM
       --cff          force-enable control-flow flattening
       --no-cff       force-disable control-flow flattening
       --pack         force-enable the encrypted loader layer
@@ -57,7 +61,9 @@ Options:
 Levels:
   min       variable renaming only (fast, light)
   balanced  renaming + string/number obfuscation + const array + junk + wrap
-  max       everything above + control-flow flattening + encrypted loader
+  heavy     balanced + control-flow flattening + encrypted loader
+  max       compile to a custom bytecode VM, then obfuscate the VM + pack
+            (lura.ph / Luraph style; strongest)
 ]]
 
 local function die(msg)
@@ -79,13 +85,15 @@ local function parse_args(argv)
       i = i + 1; opts.seed = tonumber(argv[i] or "") or die("invalid seed")
     elseif a == "-l" or a == "--level" then
       i = i + 1; opts.level = argv[i] or die("missing level")
-      if not ({ min = 1, balanced = 1, max = 1 })[opts.level] then
-        die("invalid level '" .. tostring(opts.level) .. "' (min|balanced|max)")
+      if not ({ min = 1, balanced = 1, heavy = 1, max = 1 })[opts.level] then
+        die("invalid level '" .. tostring(opts.level) .. "' (min|balanced|heavy|max)")
       end
     elseif a == "--cff" then opts.disable.control_flow = false
     elseif a == "--no-cff" then opts.disable.control_flow = true
     elseif a == "--pack" then opts.pack = true
     elseif a == "--no-pack" then opts.pack = false
+    elseif a == "--vm" then opts.vm = true
+    elseif a == "--no-vm" then opts.vm = false
     elseif a == "--names" then
       i = i + 1; opts.name_style = argv[i] or die("missing style")
     elseif a == "--no-strings" then opts.disable.encrypt_strings = true

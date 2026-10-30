@@ -104,10 +104,10 @@ def main():
                     print(f"  [XXX] {tag}  MISMATCH")
                     failures += 1
 
-    print("\n== level presets (min / balanced / max incl. CFF + pack) ==")
+    print("\n== level presets (min / balanced / heavy / max incl. CFF, VM, pack) ==")
     for ex in ("examples/hello.lua", "examples/edge.lua", "examples/closures.lua"):
         src = open(f"{ROOT}/{ex}", encoding="utf-8").read()
-        for level in ("min", "balanced", "max"):
+        for level in ("min", "balanced", "heavy", "max"):
             for seed in (1, 7, 1337):
                 ok, so, sz = verify(src, [], seed, level)
                 tag = f"{ex} level={level} seed={seed}"

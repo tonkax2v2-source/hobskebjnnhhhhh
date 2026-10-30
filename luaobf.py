@@ -10,7 +10,9 @@ Usage:
 Options:
     -o, --out FILE     write to FILE (default: stdout)
     -s, --seed N       deterministic seed (default: random)
-    -l, --level LVL    preset: min | balanced | max   (default: balanced)
+    -l, --level LVL    preset: min | balanced | heavy | max  (default: balanced)
+        --vm           force-enable compilation to the bytecode VM
+        --no-vm        force-disable the bytecode VM
         --cff          force-enable control-flow flattening
         --no-cff       force-disable control-flow flattening
         --pack         force-enable the encrypted loader layer
@@ -29,7 +31,9 @@ Options:
 Levels:
     min       variable renaming only
     balanced  renaming + string/number obfuscation + const array + junk + wrap
-    max       everything + control-flow flattening + encrypted loader
+    heavy     balanced + control-flow flattening + encrypted loader
+    max       compile to a custom bytecode VM, then obfuscate the VM + pack
+              (lura.ph / Luraph style; strongest)
 """
 import argparse
 import os
@@ -70,6 +74,10 @@ def build_opts(lua, args):
         opts["no_header"] = True
     if args.level:
         opts["level"] = args.level
+    if args.vm:
+        opts["vm"] = True
+    if args.no_vm:
+        opts["vm"] = False
     if args.cff:
         disable["control_flow"] = False
     if args.no_cff:
@@ -102,7 +110,9 @@ def main():
     p.add_argument("input", nargs="?")
     p.add_argument("-o", "--out")
     p.add_argument("-s", "--seed", type=int)
-    p.add_argument("-l", "--level", choices=["min", "balanced", "max"])
+    p.add_argument("-l", "--level", choices=["min", "balanced", "heavy", "max"])
+    p.add_argument("--vm", action="store_true")
+    p.add_argument("--no-vm", action="store_true")
     p.add_argument("--cff", action="store_true")
     p.add_argument("--no-cff", action="store_true")
     p.add_argument("--pack", action="store_true")
