@@ -10,6 +10,11 @@ Usage:
 Options:
     -o, --out FILE     write to FILE (default: stdout)
     -s, --seed N       deterministic seed (default: random)
+    -l, --level LVL    preset: min | balanced | max   (default: balanced)
+        --cff          force-enable control-flow flattening
+        --no-cff       force-disable control-flow flattening
+        --pack         force-enable the encrypted loader layer
+        --no-pack      force-disable the encrypted loader layer
         --names STYLE  identifier style: confusing | hex | short
         --no-strings   disable string encryption
         --no-numbers   disable number mangling
@@ -20,6 +25,11 @@ Options:
         --no-header    omit the leading comment header
         --verify       run original vs obfuscated and compare return values
     -h, --help         show this help
+
+Levels:
+    min       variable renaming only
+    balanced  renaming + string/number obfuscation + const array + junk + wrap
+    max       everything + control-flow flattening + encrypted loader
 """
 import argparse
 import os
@@ -58,6 +68,16 @@ def build_opts(lua, args):
         opts["name_style"] = args.names
     if args.no_header:
         opts["no_header"] = True
+    if args.level:
+        opts["level"] = args.level
+    if args.cff:
+        disable["control_flow"] = False
+    if args.no_cff:
+        disable["control_flow"] = True
+    if args.pack:
+        opts["pack"] = True
+    if args.no_pack:
+        opts["pack"] = False
     opts["chunkname"] = args.input
     return opts
 
@@ -82,6 +102,11 @@ def main():
     p.add_argument("input", nargs="?")
     p.add_argument("-o", "--out")
     p.add_argument("-s", "--seed", type=int)
+    p.add_argument("-l", "--level", choices=["min", "balanced", "max"])
+    p.add_argument("--cff", action="store_true")
+    p.add_argument("--no-cff", action="store_true")
+    p.add_argument("--pack", action="store_true")
+    p.add_argument("--no-pack", action="store_true")
     p.add_argument("--names", choices=["confusing", "hex", "short"])
     p.add_argument("--no-strings", action="store_true")
     p.add_argument("--no-numbers", action="store_true")

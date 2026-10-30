@@ -24,17 +24,39 @@ No system Lua? Use the Python front-end (it bundles a Lua runtime via `lupa`):
 ```bash
 pip install lupa
 python3 luaobf.py input.lua -o output.lua
-python3 luaobf.py input.lua --verify          # prove behaviour is preserved
+python3 luaobf.py --level max input.lua -o output.lua   # maximum hardening
+python3 luaobf.py input.lua --verify                    # prove behaviour is preserved
 ```
 
 Have a Lua interpreter? Use the native CLI:
 
 ```bash
 lua luaobf.lua input.lua -o output.lua
-lua luaobf.lua input.lua -s 1337 > output.lua
+lua luaobf.lua -l max -s 1337 input.lua > output.lua
 ```
 
 Both CLIs accept the same options.
+
+### Hardening levels
+
+| `--level` | What runs | Typical size |
+|-----------|-----------|--------------|
+| `min` | variable renaming only | ~1.3× |
+| `balanced` *(default)* | renaming + string encryption + number mangling + constant array + junk code + IIFE wrap | ~3× |
+| `max` | everything above **+ control-flow flattening + an encrypted runtime loader** | ~20–30× |
+
+At `--level max` the entire program is flattened into state machines and then
+encrypted into a blob that is decoded and `load()`-ed at runtime, so the output
+contains no readable code or strings at all:
+
+```lua
+local I0III1=function(s,a,b) ... end            -- tiny arithmetic decoder
+return assert((loadstring or load)(I0III1("\221M\217W\209Jy\254...",171,88)))(...)
+```
+
+You can also toggle the two heavy layers independently at any level:
+`--cff` / `--no-cff` (control-flow flattening) and `--pack` / `--no-pack`
+(encrypted loader).
 
 ---
 
@@ -48,8 +70,10 @@ The pipeline runs these passes in order. Each is individually switchable.
 | **number_mangle** | `--no-numbers` | Integer literals become equivalent arithmetic expressions, e.g. `100` → `(5843 - 5743)`. Floats/hex are left exact. |
 | **rename_vars** | `--no-rename` | Scope-aware renaming of every local, parameter and loop variable to confusing identifiers (`Il_II0Iil`). Globals and table fields are provably untouched because each name was resolved to its declaration during parsing. |
 | **const_array** | `--no-consts` | All string literals are hoisted into one shuffled constant table and referenced by index (`C[7]`) — the signature look of commercial obfuscators. |
+| **control_flow** | `--no-cff` (max only) | Flattens each straight-line statement sequence into a shuffled state-machine dispatcher (`while true do if V==... end end`), so textual order no longer reflects execution order. |
 | **junk_code** | `--no-junk` | Inserts dead branches guarded by opaque always-false predicates built from constant arithmetic. Harmless and never executed. |
 | **finalize** | `--no-wrap` | Wraps the whole program in an immediately-invoked vararg closure `return (function(...) ... end)(...)`, forwarding arguments and return values. |
+| **pack** *(loader)* | `--no-pack` (max only) | Encrypts the whole generated chunk and emits a runtime loader that decodes and `load()`s it. The program never appears as source. |
 
 ### Example
 
@@ -98,6 +122,11 @@ are sprinkled throughout.
 ```
 -o, --out FILE     write to FILE (default: stdout)
 -s, --seed N       deterministic seed (same seed -> identical output)
+-l, --level LVL    preset: min | balanced | max   (default: balanced)
+    --cff          force-enable control-flow flattening
+    --no-cff       force-disable control-flow flattening
+    --pack         force-enable the encrypted loader layer
+    --no-pack      force-disable the encrypted loader layer
     --names STYLE  identifier style: confusing | hex | short
     --no-strings   disable string encryption
     --no-numbers   disable number mangling
@@ -127,6 +156,8 @@ src/
   obfuscator.lua        pipeline orchestration
   util.lua              seedable PRNG, name generator, AST visitor
   passes/               one module per transformation
+                        (encrypt_strings, number_mangle, rename_vars,
+                         control_flow, const_array, junk_code, finalize)
 examples/
   hello.lua, edge.lua   sample inputs (edge.lua stresses tricky syntax)
 tools/
@@ -145,10 +176,17 @@ python3 tools/selftest.py
 ```
 
 This (1) parses and regenerates **every bundled Lua source file** and checks the
-result still compiles, and (2) runs each example through many pass-subset and
-seed combinations, executing original vs obfuscated and deep-comparing their
-return values. The obfuscator can even obfuscate its **own output repeatedly**
-(triple-obfuscation) with identical behaviour.
+result still compiles, and (2) runs each example through many pass-subset, level
+(`min`/`balanced`/`max`) and seed combinations, executing original vs obfuscated
+and deep-comparing their return values. The obfuscator can even obfuscate its
+**own output repeatedly** (triple-obfuscation) with identical behaviour.
+
+Control-flow flattening is designed to be provably safe: it runs *after*
+renaming (so every declaration name is unique and splitting `local x = e` into
+a hoisted `local x` plus `x = e` can never re-capture another variable), it only
+flattens a block's direct statements (nested loop/branch bodies stay intact, so
+closures keep their per-iteration captures), and it refuses blocks containing
+`break`/`goto`/labels or `<const>`/`<close>` locals.
 
 Tricky cases covered: multiple-return passthrough (never wrongly truncated by
 parentheses), `repeat`/`until` seeing body locals, `goto`/labels, method chains,

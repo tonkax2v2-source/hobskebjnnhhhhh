@@ -42,7 +42,7 @@ def roundtrip_loads(lua, src, name):
     return ok, err, out
 
 
-def verify(src, disable=None, seed=7):
+def verify(src, disable=None, seed=7, level=None):
     r1 = make_runtime()
     orig = deep(r1, r1.execute(src))
     r2 = make_runtime()
@@ -50,11 +50,13 @@ def verify(src, disable=None, seed=7):
     mk = r2.eval("function() return {} end")
     opts = mk()
     opts["seed"] = seed
+    if level:
+        opts["level"] = level
     d = mk()
     for k in (disable or []):
         d[k] = True
     opts["disable"] = d
-    obf = fn(src, opts)
+    obf = str(fn(src, opts))
     r3 = make_runtime()
     got = deep(r3, r3.execute(obf))
     return orig == got, len(src), len(obf)
@@ -96,6 +98,19 @@ def main():
             for seed in (1, 2, 1337):
                 ok, so, sz = verify(src, disable, seed)
                 tag = f"{ex} [{label}] seed={seed}"
+                if ok:
+                    print(f"  [OK ] {tag}  {so}->{sz}b")
+                else:
+                    print(f"  [XXX] {tag}  MISMATCH")
+                    failures += 1
+
+    print("\n== level presets (min / balanced / max incl. CFF + pack) ==")
+    for ex in ("examples/hello.lua", "examples/edge.lua", "examples/closures.lua"):
+        src = open(f"{ROOT}/{ex}", encoding="utf-8").read()
+        for level in ("min", "balanced", "max"):
+            for seed in (1, 7, 1337):
+                ok, so, sz = verify(src, [], seed, level)
+                tag = f"{ex} level={level} seed={seed}"
                 if ok:
                     print(f"  [OK ] {tag}  {so}->{sz}b")
                 else:
