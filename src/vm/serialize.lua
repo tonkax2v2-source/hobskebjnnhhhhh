@@ -107,10 +107,21 @@ local function ser_proto(p, profile, master, rng)
   })
 end
 
+-- Collects the set of canonical opcode numbers actually used by any proto, so
+-- the runtime only emits handlers that are reachable. This shrinks output and
+-- avoids emitting handler bodies (e.g. bitwise / integer-division operators)
+-- for operations the program never performs.
+local function collect_used(proto, used)
+  for _, ins in ipairs(proto.code) do used[ins[1]] = true end
+  for _, p in ipairs(proto.protos) do collect_used(p, used) end
+  return used
+end
+
 function M.generate(mainproto, profile, rng)
   local master = profile_mod.master_of(profile.key_seed)
+  local used = collect_used(mainproto, {})
   local parts = {}
-  parts[#parts + 1] = runtime.source(profile)
+  parts[#parts + 1] = runtime.source(profile, used)
   parts[#parts + 1] = "local __VMP=" .. ser_proto(mainproto, profile, master, rng) .. " "
   parts[#parts + 1] = "return exec(__VMP,{},(_ENV or _G),tpack(...))"
   return table.concat(parts)

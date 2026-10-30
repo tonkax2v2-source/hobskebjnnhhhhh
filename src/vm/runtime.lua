@@ -179,13 +179,16 @@ local DECOY_FORMS = {
 }
 
 -- Builds the handler-table assignments in the profile's randomised order.
-local function build_handlers(profile)
+-- `used` (optional) restricts real handlers to the opcodes the program uses.
+local function build_handlers(profile, used)
   local names = opcodes.NAMES
   local parts = {}
   for _, e in ipairs(profile.dispatch) do
     if e.op then
-      local nm = names[e.op]
-      parts[#parts + 1] = "__H[" .. nm .. "]=function(S) " .. HANDLERS[nm] .. " end"
+      if (not used) or used[e.op] then
+        local nm = names[e.op]
+        parts[#parts + 1] = "__H[" .. nm .. "]=function(S) " .. HANDLERS[nm] .. " end"
+      end
     else
       local frag = DECOY_FORMS[(e.decoy % #DECOY_FORMS) + 1]
       parts[#parts + 1] = "__H[" .. e.decoy .. "]=" .. frag
@@ -194,9 +197,9 @@ local function build_handlers(profile)
   return table.concat(parts, " ")
 end
 
-function M.source(profile)
+function M.source(profile, used)
   return opcode_prelude(profile) .. DECODER .. keysched(profile) ..
-         PROLOGUE .. build_handlers(profile) .. " " .. DRIVER
+         PROLOGUE .. build_handlers(profile, used) .. " " .. DRIVER
 end
 
 return M
