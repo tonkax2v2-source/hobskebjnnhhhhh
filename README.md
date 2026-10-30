@@ -117,9 +117,12 @@ Advanced hardening applied to the VM (all on by default at `--level max`):
   (Luraph `LPH_ENCSTR`-style).
 * **Per-proto rolling keys** — every function's stream uses its own key, so the
   same opcode encodes to different bytes in different functions.
-* **Randomised dispatch order** — the if/elseif branches of the interpreter are
-  emitted in a shuffled, decoy-interleaved order per build, so even the VM's
-  dispatch structure is polymorphic, not just the opcode numbers.
+* **Handler-table dispatch (Luraph v15-style)** — instead of one if/elseif
+  loop, each opcode is a separate handler closure stored in a shared table
+  keyed by its shuffled opcode number and interleaved with decoy entries; the
+  driver indexes `table[op]` and calls it with a per-activation state object.
+  The table order is randomised per build, so the dispatch structure itself is
+  polymorphic, not just the opcode numbers.
 * **Integrity checksum over the encrypted stream** — verified before any
   decryption; editing the bytecode is caught and aborts the load.
 * **Integrity checksum (anti-tamper)** — each stream carries a checksum verified
